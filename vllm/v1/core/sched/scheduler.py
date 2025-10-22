@@ -529,8 +529,7 @@ class Scheduler(SchedulerInterface):
                         num_external_computed_tokens,
                     )
 
-                if self.policy == SchedulingPolicy.FCFS:
-                    self.waiting.sort_with_computed_tokens()
+                
                 
                 # print("\n\033[33m[WAITING]\033[0m")
                 # for i in self.waiting:
@@ -679,12 +678,14 @@ class Scheduler(SchedulerInterface):
     ) -> None:
         for request in self.waiting:
             if request.num_computed_tokens == 0: #prefill phase
-                _, new_new_local_tokens = \
-                self.kv_cache_manager.get_computed_blocks(request)
+                new_local_tokens = \
+                self.kv_cache_manager.get_computed_tokens(request)
                 # print(f"\n\033[34m[WAITING PREFIX UPDATE]\033[0m req_id={request.request_id}, "
                 #       f"old_local_tokens={request.var_computed_tokens}, "
-                #       f"new_local_tokens={new_new_local_tokens}")
-                request.var_computed_tokens = new_new_local_tokens
+                #       f"new_local_tokens={new_local_tokens}")
+                request.var_computed_tokens = new_local_tokens
+        if self.policy == SchedulingPolicy.FCFS:
+            self.waiting.sort_with_computed_tokens()
             
 
     def _update_after_schedule(
