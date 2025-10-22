@@ -396,39 +396,41 @@ class Scheduler(SchedulerInterface):
                 load_kv_async = False
 
                 # Get already-cached tokens.
-                if request.num_computed_tokens == 0:
-                    # Get locally-cached tokens.
-                    new_computed_blocks, num_new_local_computed_tokens = (
-                        self.kv_cache_manager.get_computed_blocks(request)
-                    )
+                # if request.num_computed_tokens == 0:
+                #     # Get locally-cached tokens.
+                #     new_computed_blocks, num_new_local_computed_tokens = (
+                #         self.kv_cache_manager.get_computed_blocks(request)
+                #     )
 
-                    # Get externally-cached tokens if using a KVConnector.
-                    if self.connector is not None:
-                        num_external_computed_tokens, load_kv_async = (
-                            self.connector.get_num_new_matched_tokens(
-                                request, num_new_local_computed_tokens
-                            )
-                        )
+                #     # Get externally-cached tokens if using a KVConnector.
+                #     if self.connector is not None:
+                #         num_external_computed_tokens, load_kv_async = (
+                #             self.connector.get_num_new_matched_tokens(
+                #                 request, num_new_local_computed_tokens
+                #             )
+                #         )
 
-                        if num_external_computed_tokens is None:
-                            # The request cannot be scheduled because
-                            # the KVConnector couldn't determine
-                            # the number of matched tokens.
-                            self.waiting.pop_request()
-                            skipped_waiting_requests.prepend_request(request)
-                            continue
+                #         if num_external_computed_tokens is None:
+                #             # The request cannot be scheduled because
+                #             # the KVConnector couldn't determine
+                #             # the number of matched tokens.
+                #             self.waiting.pop_request()
+                #             skipped_waiting_requests.prepend_request(request)
+                #             continue
 
-                    # Total computed tokens (local + external).
-                    num_computed_tokens = (
-                        num_new_local_computed_tokens + num_external_computed_tokens
-                    )
-                # KVTransfer: WAITING reqs have num_computed_tokens > 0
-                # after async KV recvs are completed.
-                else:
-                    new_computed_blocks = self.kv_cache_manager.empty_kv_cache_blocks
-                    num_new_local_computed_tokens = 0
-                    num_computed_tokens = request.num_computed_tokens
-
+                #     # Total computed tokens (local + external).
+                #     num_computed_tokens = (
+                #         num_new_local_computed_tokens + num_external_computed_tokens
+                #     )
+                # # KVTransfer: WAITING reqs have num_computed_tokens > 0
+                # # after async KV recvs are completed.
+                # else:
+                #     new_computed_blocks = self.kv_cache_manager.empty_kv_cache_blocks
+                #     num_new_local_computed_tokens = 0
+                #     num_computed_tokens = request.num_computed_tokens
+                num_new_local_computed_tokens, num_computed_tokens, \
+                new_computed_blocks, load_kv_async, num_external_computed_tokens = \
+                    self._update_waiting_prefix(self.waiting, skipped_waiting_requests)
                 encoder_inputs_to_schedule = None
                 new_encoder_compute_budget = encoder_compute_budget
 
@@ -660,6 +662,41 @@ class Scheduler(SchedulerInterface):
 
         self._update_after_schedule(scheduler_output)
         return scheduler_output
+
+    def _update_waiting_prefix(
+        self,
+        waiting,
+        skipped_waiting_requests
+    ) -> None:
+        # Update num_cached_tokens for requests in waiting queue
+        for request in waiting:
+            num_external_computed_tokens = 0
+            load_kv_async = False
+            # binwon: Sort with nr_computed_tokens
+            # Get already-cached tokens.
+            if request.num_computed_tokens == 0:
+                # Get locally-cached tokens.
+                new_computed_blocks, num_new_local_computed_tokens = \
+                    self.kv_cache_manager.get_computed_blocks(
+                        request)
+                # Get externally-cached tokens if using a KVConnector.
+                if self.connector is not None:
+                    num_external_computed_tokens, load_kv_async = (
+                        self.connector.get_num_new_matched_tokens(
+                            request, num_new_local_computed_tokens))
+
+                    if num_external_computed_tokens is None:
+                        # The request cannot be scheduled because
+                        # the KVConnector couldn't determine
+                        # the number of matched tokens.
+                        self.waiting.pop_request()
+                        skipped_waiting_requests.prepend_request(request)
+                        continue
+            else:
+                new_computed_blocks = (
+                    self.kv_cache_manager.create_empty_block_list())
+                num_new_local_computed_tokens = 0
+        return num_new_local_computed_tokens, request.num_computed_tokens, new_computed_blocks, load_kv_async, num_external_computed_tokens
 
     def _update_after_schedule(
         self,
