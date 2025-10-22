@@ -172,7 +172,30 @@ class KVCacheManager:
         stats = self.prefix_cache_stats
         self.prefix_cache_stats = PrefixCacheStats()
         return stats
+    def get_computed_tokens(self, request: Request) -> int:
+        """Get the number of computed (cached) tokens for the request.
 
+        Args:
+            request: The request to get the number of computed tokens.
+        Returns:
+            The number of computed tokens for the request.
+        """
+        # Prefix caching is disabled or
+        # When the request requires prompt logprobs, we skip prefix caching.
+        if not self.enable_caching or (
+            request.sampling_params is not None
+            and request.sampling_params.prompt_logprobs is not None
+        ):
+            return 0
+
+        max_cache_hit_length = request.num_tokens - 1
+        _, num_new_computed_tokens = (
+            self.coordinator.find_longest_cache_hit(
+                request.block_hashes, max_cache_hit_length
+            )
+        )
+
+        return num_new_computed_tokens
     def get_computed_blocks(self, request: Request) -> tuple[KVCacheBlocks, int]:
         """Get the computed (cached) blocks for the request.
         Note that the computed blocks must be full.
