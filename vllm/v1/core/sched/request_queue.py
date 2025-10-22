@@ -117,8 +117,8 @@ class FCFSRequestQueue(deque[Request], RequestQueue):
         self.extend(filtered_requests)
         
     def sort_with_computed_tokens(self) -> None:
-        """Sort the queue based on num_computed_tokens in ascending order."""
-        sorted_requests = sorted(self, key=lambda req: req.num_computed_tokens, reverse=True)
+        """Sort the queue based on var_computed_tokens in ascending order."""
+        sorted_requests = sorted(self, key=lambda req: req.var_computed_tokens, reverse=True)
         # deque does not support in-place sorting, so we need to clear
         # and extend
         self.clear()
