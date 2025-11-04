@@ -51,6 +51,7 @@ class Scheduler(SchedulerInterface):
         mm_registry: MultiModalRegistry = MULTIMODAL_REGISTRY,
         include_finished_set: bool = False,
         log_stats: bool = False,
+        
     ) -> None:
         self.vllm_config = vllm_config
         self.scheduler_config = vllm_config.scheduler_config
@@ -202,6 +203,31 @@ class Scheduler(SchedulerInterface):
         # For logging.
         scheduled_timestamp = time.monotonic()
 
+        vtc_cap = None
+        if getattr(self.scheduler_config, "vtc_max_tokens_per_req", None) is not None:
+            vtc_cap = int(self.scheduler_config.vtc_max_tokens_per_req)
+            # Reset per-request VTC counters for this scheduling step.
+            # Use a robust iteration over self.requests so we cover all known
+            # requests regardless of the queue implementation.
+            logger.debug(
+                "VTC cap is set to %d; resetting per-request VTC counters for this schedule",
+                vtc_cap,
+            )
+            for req in self.requests.values():
+                # Only reset counters for requests that could be scheduled
+                # (RUNNING, WAITING and related states).
+                try:
+                    if req.status in (
+                        RequestStatus.RUNNING,
+                        RequestStatus.WAITING,
+                        RequestStatus.PREEMPTED,
+                        RequestStatus.WAITING_FOR_REMOTE_KVS,
+                    ):
+                        req.vtc_tokens_in_step = 0
+                except Exception:
+                    # Gracefully ignore older Request instances without the field.
+                    pass
+        
         # First, schedule the RUNNING requests.
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
@@ -212,6 +238,8 @@ class Scheduler(SchedulerInterface):
                 + request.num_output_placeholders
                 - request.num_computed_tokens
             )
+            
+            #chunked prefill
             if 0 < self.scheduler_config.long_prefill_token_threshold < num_new_tokens:
                 num_new_tokens = self.scheduler_config.long_prefill_token_threshold
             num_new_tokens = min(num_new_tokens, token_budget)
@@ -221,6 +249,16 @@ class Scheduler(SchedulerInterface):
             num_new_tokens = min(
                 num_new_tokens, self.max_model_len - 1 - request.num_computed_tokens
             )
+
+            # binwon:VTC 
+            # Apply VTC cap if applicable.
+            if vtc_cap is not None:
+                already_scheduled = getattr(request, "vtc_tokens_in_step", 0)
+                if already_scheduled >= vtc_cap:
+                    # This request has already reached its VTC cap.
+                    req_index += 1
+                    continue
+                num_new_tokens = min(num_new_tokens, vtc_cap - already_scheduled)
 
             # Schedule encoder inputs.
             encoder_inputs_to_schedule = None
@@ -252,7 +290,8 @@ class Scheduler(SchedulerInterface):
                 # allow the lower-priority requests to be scheduled.
                 req_index += 1
                 continue
-
+            
+            
             # Schedule newly needed KV blocks for the request.
             while True:
                 new_blocks = self.kv_cache_manager.allocate_slots(
@@ -351,6 +390,7 @@ class Scheduler(SchedulerInterface):
                     break
 
                 request = self.waiting.peek_request()
+                
 
                 # KVTransfer: skip request if still waiting for remote kvs.
                 if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
@@ -463,6 +503,18 @@ class Scheduler(SchedulerInterface):
 
                     num_new_tokens = min(num_new_tokens, token_budget)
                     assert num_new_tokens > 0
+
+                # binwon: VTC - enforce cap for newly-scheduled (WAITING -> RUNNING)
+                if vtc_cap is not None:
+                    already_scheduled = getattr(request, "vtc_tokens_in_step", 0)
+                    if already_scheduled >= vtc_cap:
+                        # Skip this waiting request for fairness this step.
+                        self.waiting.pop_request()
+                        skipped_waiting_requests.prepend_request(request)
+                        continue
+                    # Limit the number of tokens we will schedule for this request
+                    # so it does not exceed the per-request VTC cap.
+                    num_new_tokens = min(num_new_tokens, vtc_cap - already_scheduled)
 
                     # Schedule encoder inputs.
                     if request.has_encoder_inputs:
@@ -615,6 +667,7 @@ class Scheduler(SchedulerInterface):
         structured_output_request_ids, grammar_bitmask = self.get_grammar_bitmask(
             num_scheduled_tokens.keys(), scheduled_spec_decode_tokens
         )
+        
         scheduler_output = SchedulerOutput(
             scheduled_new_reqs=new_reqs_data,
             scheduled_cached_reqs=cached_reqs_data,
@@ -632,7 +685,11 @@ class Scheduler(SchedulerInterface):
             structured_output_request_ids=structured_output_request_ids,
             grammar_bitmask=grammar_bitmask,
         )
-
+        
+        # totals, perc = self._compute_step_token_breakdown(scheduler_output)
+        totals = self._compute_step_token_breakdown(scheduler_output)
+        # logger.info("Step token breakdown totals=%s percentages=%s", totals, perc)
+        logger.info("Step token breakdown totals=%s", totals)
         # NOTE(Kuntai): this function is designed for multiple purposes:
         # 1. Plan the KV cache store
         # 2. Wrap up all the KV cache load / save ops into an opaque object
@@ -657,9 +714,52 @@ class Scheduler(SchedulerInterface):
         if events:
             batch = KVEventBatch(ts=time.time(), events=events)
             self.kv_event_publisher.publish(batch)
-
         self._update_after_schedule(scheduler_output)
         return scheduler_output
+    
+    def _compute_step_token_breakdown(self, scheduler_output):
+        totals = {"prefill": 0, "decode": 0, "spec_decode": 0, "encoder_input": 0}
+        for req_id, n_scheduled in scheduler_output.num_scheduled_tokens.items():
+            # 요청 객체 (스케줄러가 가지고 있는 Request)
+            req = self.requests.get(req_id)
+            if req is None:
+                continue
+
+            start = req.num_computed_tokens
+            end = start + n_scheduled  # half-open interval [start, end)
+
+            # prefill(프롬프트) 계산
+            prompt_len = getattr(req, "num_prompt_tokens", 0)
+            prefill = max(0, min(end, prompt_len) - start)  # 겹치는 길이
+            # 전체 scheduled 중 prefill을 제외한 건 디코딩(또는 spec 포함)
+            remaining = n_scheduled - prefill
+
+            # spec decode는 scheduler_output에 명시되어 있음 (없으면 0)
+            spec = len(scheduler_output.scheduled_spec_decode_tokens.get(req_id, []))
+
+            # decoding(일반 디코딩, spec 토큰 제외)
+            decode_non_spec = max(0, remaining - spec)
+
+            # encoder inputs(멀티모달) 개수: scheduled_encoder_inputs에 리스트가 있으면 해당 mm_features 길이를 더함
+            enc_list = scheduler_output.scheduled_encoder_inputs.get(req_id, [])
+            enc_tokens = 0
+            if enc_list:
+                for enc_idx in enc_list:
+                    mm = req.mm_features[enc_idx]
+                    enc_tokens += mm.mm_position.length
+
+            totals["prefill"] += prefill
+            totals["spec_decode"] += spec
+            totals["decode"] += decode_non_spec
+            totals["encoder_input"] += enc_tokens
+
+            # 전체 합(필요에 따라 spec 포함 여부 조절)
+            grand_total = sum(totals.values()) if sum(totals.values()) > 0 else 1
+            percentages = {k: 100.0 * v / grand_total for k, v in totals.items()}
+            
+            return totals
+
+        
 
     def _update_after_schedule(
         self,
@@ -677,7 +777,16 @@ class Scheduler(SchedulerInterface):
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
         for req_id, num_scheduled_token in num_scheduled_tokens.items():
             request = self.requests[req_id]
+            print("Scheduling request", req_id, "for", num_scheduled_token, "tokens", "prompt tokens", request.num_prompt_tokens)
             request.num_computed_tokens += num_scheduled_token
+            # Track scheduled tokens in this scheduling step for VTC enforcement.
+            try:
+                request.vtc_tokens_in_step = getattr(request, "vtc_tokens_in_step", 0) + (
+                    num_scheduled_token
+                )
+            except Exception:
+                # If older Request objects lack the field, ignore.
+                pass
 
             # NOTE: _free_encoder_inputs relies on num_computed_tokens, which
             # may be updated again in _update_from_output for speculative
@@ -906,6 +1015,7 @@ class Scheduler(SchedulerInterface):
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
     ) -> dict[int, EngineCoreOutputs]:
+        
         sampled_token_ids = model_runner_output.sampled_token_ids
         logprobs = model_runner_output.logprobs
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
@@ -1094,6 +1204,12 @@ class Scheduler(SchedulerInterface):
         # a request is still being prefilled, we expect the model runner
         # to return empty token ids for the request.
         stopped = False
+        
+        # VTC: note how many tokens were actually generated (for observability).
+        generated_cnt = len(new_token_ids)
+        print(
+            "Request %s generated %d tokens in this step", request.request_id, generated_cnt
+        )
         for num_new, output_token_id in enumerate(new_token_ids, 1):
             request.append_output_token_ids(output_token_id)
 

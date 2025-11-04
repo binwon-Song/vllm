@@ -44,6 +44,7 @@ class Request:
         priority: int = 0,
         trace_headers: Mapping[str, str] | None = None,
         block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
+        vtc_tokens_in_step: int = 0, # binwon: VTC
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -126,6 +127,10 @@ class Request:
         if block_hasher is not None:
             self.get_hash_new_full_blocks = partial(block_hasher, self)
             self.block_hashes = self.get_hash_new_full_blocks()
+            
+        # binwon: VTC
+        # Number of tokens generated in the current scheduling step
+        self.vtc_tokens_in_step = vtc_tokens_in_step
 
     @classmethod
     def from_engine_core_request(

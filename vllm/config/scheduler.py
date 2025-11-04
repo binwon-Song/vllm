@@ -144,6 +144,13 @@ class SchedulerConfig:
     async scheduling is currently not supported with some features such as
     structured outputs, speculative decoding, and pipeline parallelism.
     """
+    
+    #binwon: VTC
+    vtc_max_tokens_per_req : int = 0
+    """If greater than 0, enables the VTC (Variable Token Chunking) scheduling
+    feature, allowing requests to use up to this many tokens per scheduling step.
+    """
+    
 
     def compute_hash(self) -> str:
         """
