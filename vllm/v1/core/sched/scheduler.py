@@ -1220,7 +1220,7 @@ class Scheduler(SchedulerInterface):
         # VTC: note how many tokens were actually generated (for observability).
         generated_cnt = len(new_token_ids)
         print(
-            "Request %s generated %d tokens in this step", request.request_id, generated_cnt
+            f"Request {request.request_id} generated {generated_cnt} tokens in this step"
         )
         request.vtc_tokens_in_step = generated_cnt
         for num_new, output_token_id in enumerate(new_token_ids, 1):
