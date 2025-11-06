@@ -520,6 +520,7 @@ class Scheduler(SchedulerInterface):
                       f"already_tokens={already_tokens}, "
                       f"prev_step_tokens={prev_step_tokens}, "
                       f"cur_step_tokens={cur_step_tokens}, ")
+                    
                     if cur_step_tokens >= vtc_cap:
                         # Skip this waiting request for fairness this step.
                         self.waiting.pop_request()
