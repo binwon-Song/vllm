@@ -780,7 +780,7 @@ class Scheduler(SchedulerInterface):
             # grand_total = sum(totals.values()) if sum(totals.values()) > 0 else 1
             # percentages = {k: 100.0 * v / grand_total for k, v in totals.items()}
             
-            return totals
+        return totals
 
         
 
