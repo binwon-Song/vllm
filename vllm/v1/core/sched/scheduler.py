@@ -700,8 +700,7 @@ class Scheduler(SchedulerInterface):
         
         # totals, perc = self._compute_step_token_breakdown(scheduler_output)
         totals = self._compute_step_token_breakdown(scheduler_output)
-        # logger.info("Step token breakdown totals=%s percentages=%s", totals, perc)
-        logger.info("Step token breakdown totals=%s", totals)
+        print("\033[94m[Scheduler]\033[0m]", "Step token breakdown:", totals)
         # NOTE(Kuntai): this function is designed for multiple purposes:
         # 1. Plan the KV cache store
         # 2. Wrap up all the KV cache load / save ops into an opaque object
@@ -730,44 +729,59 @@ class Scheduler(SchedulerInterface):
         return scheduler_output
     
     def _compute_step_token_breakdown(self, scheduler_output):
-        totals = {"prefill": 0, "decode": 0, "spec_decode": 0, "encoder_input": 0}
+        totals = {"prefill": 0, "decode": 0}
         for req_id, n_scheduled in scheduler_output.num_scheduled_tokens.items():
             # 요청 객체 (스케줄러가 가지고 있는 Request)
             req = self.requests.get(req_id)
             if req is None:
                 continue
-
-            start = req.num_computed_tokens
-            end = start + n_scheduled  # half-open interval [start, end)
+            
+            # 스케줄링된 요청이 prefill인지 decode인지 구분
+            prompt_len = getattr(req, "num_prompt_tokens", 0)
+            computed_len = getattr(req, "num_computed_tokens", 0)
+            if computed_len < prompt_len:
+                # prefill
+                prefill_scheduled = min(n_scheduled, prompt_len - computed_len)
+                totals["prefill"] += prefill_scheduled
+                decode_scheduled = n_scheduled - prefill_scheduled
+                totals["decode"] += max(0, decode_scheduled)
+            else:
+                # decode
+                totals["decode"] += n_scheduled
+            
+            
+            # start = req.num_computed_tokens
+            # end = start + n_scheduled  # half-open interval [start, end)
 
             # prefill(프롬프트) 계산
-            prompt_len = getattr(req, "num_prompt_tokens", 0)
-            prefill = max(0, min(end, prompt_len) - start)  # 겹치는 길이
-            # 전체 scheduled 중 prefill을 제외한 건 디코딩(또는 spec 포함)
-            remaining = n_scheduled - prefill
+            # prompt_len = getattr(req, "num_prompt_tokens", 0)
+            # totals["prompt"] += prompt_len
+            # prefill = max(0, min(end, prompt_len) - start)  # 겹치는 길이
+            # # 전체 scheduled 중 prefill을 제외한 건 디코딩(또는 spec 포함)
+            # remaining = n_scheduled - prefill
 
-            # spec decode는 scheduler_output에 명시되어 있음 (없으면 0)
-            spec = len(scheduler_output.scheduled_spec_decode_tokens.get(req_id, []))
+            # # spec decode는 scheduler_output에 명시되어 있음 (없으면 0)
+            # spec = len(scheduler_output.scheduled_spec_decode_tokens.get(req_id, []))
 
-            # decoding(일반 디코딩, spec 토큰 제외)
-            decode_non_spec = max(0, remaining - spec)
+            # # decoding(일반 디코딩, spec 토큰 제외)
+            # decode_non_spec = max(0, remaining - spec)
 
-            # encoder inputs(멀티모달) 개수: scheduled_encoder_inputs에 리스트가 있으면 해당 mm_features 길이를 더함
-            enc_list = scheduler_output.scheduled_encoder_inputs.get(req_id, [])
-            enc_tokens = 0
-            if enc_list:
-                for enc_idx in enc_list:
-                    mm = req.mm_features[enc_idx]
-                    enc_tokens += mm.mm_position.length
+            # # encoder inputs(멀티모달) 개수: scheduled_encoder_inputs에 리스트가 있으면 해당 mm_features 길이를 더함
+            # enc_list = scheduler_output.scheduled_encoder_inputs.get(req_id, [])
+            # enc_tokens = 0
+            # if enc_list:
+            #     for enc_idx in enc_list:
+            #         mm = req.mm_features[enc_idx]
+            #         enc_tokens += mm.mm_position.length
 
-            totals["prefill"] += prefill
-            totals["spec_decode"] += spec
-            totals["decode"] += decode_non_spec
-            totals["encoder_input"] += enc_tokens
+            # totals["prefill"] += prefill
+            # totals["spec_decode"] += spec
+            # totals["decode"] += decode_non_spec
+            # totals["encoder_input"] += enc_tokens
 
-            # 전체 합(필요에 따라 spec 포함 여부 조절)
-            grand_total = sum(totals.values()) if sum(totals.values()) > 0 else 1
-            percentages = {k: 100.0 * v / grand_total for k, v in totals.items()}
+            # # 전체 합(필요에 따라 spec 포함 여부 조절)
+            # grand_total = sum(totals.values()) if sum(totals.values()) > 0 else 1
+            # percentages = {k: 100.0 * v / grand_total for k, v in totals.items()}
             
             return totals
 
@@ -1027,7 +1041,7 @@ class Scheduler(SchedulerInterface):
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
     ) -> dict[int, EngineCoreOutputs]:
-        
+        print("\033[94m[DEBUG]\033[0m", "Updating from model output...")
         sampled_token_ids = model_runner_output.sampled_token_ids
         logprobs = model_runner_output.logprobs
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
@@ -1104,6 +1118,7 @@ class Scheduler(SchedulerInterface):
 
             # Check for stop and update request status.
             if new_token_ids:
+                print("\033[94m[DEBUG]\033[0m", "Updating request with new token IDs...")
                 new_token_ids, stopped = self._update_request_with_output(
                     request, new_token_ids
                 )
