@@ -741,13 +741,10 @@ class Scheduler(SchedulerInterface):
             computed_len = getattr(req, "num_computed_tokens", 0)
             if computed_len < prompt_len:
                 # prefill
-                prefill_scheduled = min(n_scheduled, prompt_len - computed_len)
-                totals["prefill"] += prefill_scheduled
-                decode_scheduled = n_scheduled - prefill_scheduled
-                totals["decode"] += max(0, decode_scheduled)
+                totals["prefill"] += 1
             else:
                 # decode
-                totals["decode"] += n_scheduled
+                totals["decode"] += 1
             
             
             # start = req.num_computed_tokens
@@ -1178,6 +1175,8 @@ class Scheduler(SchedulerInterface):
                 # Invariant: EngineCore returns no partial prefill outputs.
                 assert not prompt_logprobs_tensors
 
+            print("\033[94m[DEBUG]\033[0m", f"Updated request {req_id}, total_output_tokens={request.num_tokens}")
+
         # Remove the stopped requests from the running and waiting queues.
         if stopped_running_reqs:
             self.running = remove_all(self.running, stopped_running_reqs)
@@ -1235,7 +1234,7 @@ class Scheduler(SchedulerInterface):
         # VTC: note how many tokens were actually generated (for observability).
         generated_cnt = len(new_token_ids)
         print(
-            f"Request {request.request_id} generated {generated_cnt} tokens in this step"
+            f"\033[94m[DEBUG]\033[0m request output Request {request.request_id} generated {generated_cnt} tokens in this step"
         )
         request.vtc_tokens_in_step = generated_cnt
         for num_new, output_token_id in enumerate(new_token_ids, 1):
