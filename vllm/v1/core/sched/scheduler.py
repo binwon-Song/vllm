@@ -252,21 +252,22 @@ class Scheduler(SchedulerInterface):
 
             # binwon:VTC 
             # Apply VTC cap if applicable.
-            # if vtc_cap is not None:
-            #     prev_step_tokens = getattr(request, "vtc_tokens_in_step", 0)
-            #     already_tokens = len(request._output_token_ids)
-            #     cur_step_tokens = already_tokens - prev_step_tokens
-            #     print("[DEBUG]:VTC ",f"Scheduling RUNNING req {request.request_id}: "
-            #           f"already_tokens={already_tokens}, "
-            #           f"prev_step_tokens={prev_step_tokens}, "
-            #           f"cur_step_tokens={cur_step_tokens}, ")
-            #     if cur_step_tokens >= vtc_cap:
-            #         # This request has already reached its VTC cap.
-            #         # self.waiting.pop_request()
-            #         # skipped_waiting_requests.prepend_request(request)
-            #         req_index += 1
-            #         continue
-            #     num_new_tokens = min(num_new_tokens, vtc_cap - cur_step_tokens)
+            if vtc_cap is not None:
+                prev_step_tokens = getattr(request, "prev_vtc_stemp", 0)
+                already_tokens = len(request.all_token_ids)
+                cur_step_tokens = already_tokens - prev_step_tokens
+                print("\033[93m[DEBUG]\033[0m:VTC ",f"Scheduling RUNNING req {request.request_id}: "
+                      f"already_tokens={already_tokens}, "
+                      f"prev_step_tokens={prev_step_tokens}, "
+                      f"cur_step_tokens={cur_step_tokens}, ")
+                if cur_step_tokens >= vtc_cap:
+                    # This request has already reached its VTC cap.
+                    # self.waiting.pop_request()
+                    # skipped_waiting_requests.prepend_request(request)
+                    req_index += 1
+                    request.prev_vtc_stemp = already_tokens
+                    continue
+                num_new_tokens = min(num_new_tokens, vtc_cap - cur_step_tokens)
 
             # Schedule encoder inputs.
             encoder_inputs_to_schedule = None
@@ -513,20 +514,21 @@ class Scheduler(SchedulerInterface):
                     assert num_new_tokens > 0
 
                 # binwon: VTC - enforce cap for newly-scheduled (WAITING -> RUNNING)
-                # if vtc_cap is not None:
-                #     prev_step_tokens = getattr(request, "vtc_tokens_in_step", 0) # tokens at prev step
-                #     already_tokens = len(request._output_token_ids)  # output tokens
-                #     cur_step_tokens = already_tokens - prev_step_tokens # tokens this step
-                #     print("[DEBUG]:VTC ",f"Scheduling WAITING req {request.request_id}: "
-                #       f"already_tokens={already_tokens}, "
-                #       f"prev_step_tokens={prev_step_tokens}, "
-                #       f"cur_step_tokens={cur_step_tokens}, ")
-                #     if cur_step_tokens >= vtc_cap:
-                #         # Skip this waiting request for fairness this step.
-                #         self.waiting.pop_request()
-                #         skipped_waiting_requests.prepend_request(request)
-                #         continue
-                #     num_new_tokens = min(num_new_tokens, vtc_cap - cur_step_tokens)
+                if vtc_cap is not None:
+                    prev_step_tokens = getattr(request, "prev_vtc_stemp", 0) # tokens at prev step
+                    already_tokens = len(request.all_token_ids)  # output tokens
+                    cur_step_tokens = already_tokens - prev_step_tokens # tokens this step
+                    print("\033[93m[DEBUG]VTC \033[0m:",f"Scheduling WAITING req {request.request_id}: "
+                      f"already_tokens={already_tokens}, "
+                      f"prev_step_tokens={prev_step_tokens}, "
+                      f"cur_step_tokens={cur_step_tokens}, ")
+                    if cur_step_tokens >= vtc_cap:
+                        # Skip this waiting request for fairness this step.
+                        request.prev_vtc_stemp = already_tokens
+                        self.waiting.pop_request()
+                        skipped_waiting_requests.prepend_request(request)
+                        continue
+                    num_new_tokens = min(num_new_tokens, vtc_cap - cur_step_tokens)
 
                     # Schedule encoder inputs.
                     if request.has_encoder_inputs:
