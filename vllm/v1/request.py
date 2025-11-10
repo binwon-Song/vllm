@@ -129,8 +129,7 @@ class Request:
             self.block_hashes = self.get_hash_new_full_blocks()
             
         # binwon: VTC
-        # Number of tokens generated in the current scheduling step
-        self.prev_vtc_stemp = prev_vtc_stemp
+        self.vtc_counter = prev_vtc_stemp
 
     @classmethod
     def from_engine_core_request(

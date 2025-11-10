@@ -1034,7 +1034,11 @@ class EngineArgs:
         scheduler_group.add_argument(
             "--async-scheduling", **scheduler_kwargs["async_scheduling"]
         )
-
+        #binwon:VTC
+        scheduler_group.add_argument(
+            "--vtc_max_tokens_per_req", **scheduler_kwargs.get["vtc_max_tokens_per_req"]
+        )
+        
         # vLLM arguments
         vllm_kwargs = get_kwargs(VllmConfig)
         vllm_group = parser.add_argument_group(
