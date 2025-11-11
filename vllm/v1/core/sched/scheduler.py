@@ -528,7 +528,10 @@ class Scheduler(SchedulerInterface):
                 # vtc_cap = 2
                 if vtc_cap is not None:
                     cur_counter = request.vtc_counter
-                    
+                    print("\033[93m[DEBUG]VTC \033[0m:",
+                          f"Scheduling WAITING req {request.request_id}: "
+                          f"cur_counter={cur_counter},"
+                          f"num_new_tokens={num_new_tokens}, vtc_cap={vtc_cap}")
                     # refill -> False
                     # any request have to receive resource -> True
                     
@@ -539,11 +542,7 @@ class Scheduler(SchedulerInterface):
                             continue
                         else:
                             num_new_tokens = min(num_new_tokens, vtc_cap - cur_counter)
-                            
-                    
-                        
-                    
-                    
+                    print("\033[93m[DEBUG]VTC \033[0m:",f"After VTC check, num_new_tokens={num_new_tokens}")
                     
                     # prev_step_tokens = getattr(request, "prev_vtc_stemp", 0) # tokens at prev step
                     # already_tokens = len(request.all_token_ids)  # output tokens
@@ -728,9 +727,9 @@ class Scheduler(SchedulerInterface):
             grammar_bitmask=grammar_bitmask,
         )
         
-        # totals, perc = self._compute_step_token_breakdown(scheduler_output)
-        totals = self._compute_step_token_breakdown(scheduler_output)
-        print("\033[94m[Scheduler]\033[0m]", "Step token breakdown:", totals)
+        # totals = self._compute_step_token_breakdown(scheduler_output)
+        # print("\033[94m[Scheduler]\033[0m]", "Step token breakdown:", totals)
+        
         # NOTE(Kuntai): this function is designed for multiple purposes:
         # 1. Plan the KV cache store
         # 2. Wrap up all the KV cache load / save ops into an opaque object
