@@ -505,6 +505,8 @@ class EngineArgs:
     )
     scheduling_policy: SchedulerPolicy = SchedulerConfig.policy
     scheduler_cls: str | type[object] = SchedulerConfig.scheduler_cls
+    # Virtual Token Cap (per-request) - exposed as CLI `--vtc-max-tokens-per-req`
+    vtc_max_tokens_per_req: int = SchedulerConfig.vtc_max_tokens_per_req
 
     pooler_config: PoolerConfig | None = ModelConfig.pooler_config
     override_pooler_config: dict | PoolerConfig | None = (
@@ -1035,8 +1037,9 @@ class EngineArgs:
             "--async-scheduling", **scheduler_kwargs["async_scheduling"]
         )
         #binwon:VTC
+        # accept dashed form for CLI flag (consistent with other args)
         scheduler_group.add_argument(
-            "--vtc_max_tokens_per_req", **scheduler_kwargs.get["vtc_max_tokens_per_req"]
+            "--vtc-max-tokens-per-req", **scheduler_kwargs["vtc_max_tokens_per_req"]
         )
         
         # vLLM arguments
@@ -1560,6 +1563,7 @@ class EngineArgs:
             long_prefill_token_threshold=self.long_prefill_token_threshold,
             disable_hybrid_kv_cache_manager=self.disable_hybrid_kv_cache_manager,
             async_scheduling=self.async_scheduling,
+            vtc_max_tokens_per_req=self.vtc_max_tokens_per_req,
         )
 
         if not model_config.is_multimodal_model and self.default_mm_loras:
