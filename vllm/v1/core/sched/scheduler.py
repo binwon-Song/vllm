@@ -418,47 +418,56 @@ class Scheduler(SchedulerInterface):
                 if len(self.running) == self.max_num_running_reqs:
                     break
 
-                request = self.waiting.peek_request()
+                # Select request based on scheduling policy
+                if self.policy == SchedulingPolicy.LPM:
+                    # LPM: Select request with longest prefix cache hit
+                    request = self._select_best_waiting_request_lpm(scheduled_loras)
+                    if request is None:
+                        # No eligible request found
+                        break
+                else:
+                    # FCFS/Priority: Use standard peek
+                    request = self.waiting.peek_request()
 
-                # KVTransfer: skip request if still waiting for remote kvs.
-                if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
-                    is_ready = self._update_waiting_for_remote_kv(request)
-                    if is_ready:
-                        request.status = RequestStatus.WAITING
-                    else:
-                        logger.debug(
-                            "%s is still in WAITING_FOR_REMOTE_KVS state.",
-                            request.request_id,
+                    # KVTransfer: skip request if still waiting for remote kvs.
+                    if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
+                        is_ready = self._update_waiting_for_remote_kv(request)
+                        if is_ready:
+                            request.status = RequestStatus.WAITING
+                        else:
+                            logger.debug(
+                                "%s is still in WAITING_FOR_REMOTE_KVS state.",
+                                request.request_id,
+                            )
+                            self.waiting.pop_request()
+                            skipped_waiting_requests.prepend_request(request)
+                            continue
+
+                    # Skip request if the structured output request is still waiting
+                    # for FSM compilation.
+                    if request.status == RequestStatus.WAITING_FOR_FSM:
+                        structured_output_req = request.structured_output_request
+                        if structured_output_req and structured_output_req.grammar:
+                            request.status = RequestStatus.WAITING
+                        else:
+                            self.waiting.pop_request()
+                            skipped_waiting_requests.prepend_request(request)
+                            continue
+
+                    # Check that adding the request still respects the max_loras
+                    # constraint.
+                    if (
+                        self.lora_config
+                        and request.lora_request
+                        and (
+                            len(scheduled_loras) == self.lora_config.max_loras
+                            and request.lora_request.lora_int_id not in scheduled_loras
                         )
+                    ):
+                        # Scheduling would exceed max_loras, skip.
                         self.waiting.pop_request()
                         skipped_waiting_requests.prepend_request(request)
                         continue
-
-                # Skip request if the structured output request is still waiting
-                # for FSM compilation.
-                if request.status == RequestStatus.WAITING_FOR_FSM:
-                    structured_output_req = request.structured_output_request
-                    if structured_output_req and structured_output_req.grammar:
-                        request.status = RequestStatus.WAITING
-                    else:
-                        self.waiting.pop_request()
-                        skipped_waiting_requests.prepend_request(request)
-                        continue
-
-                # Check that adding the request still respects the max_loras
-                # constraint.
-                if (
-                    self.lora_config
-                    and request.lora_request
-                    and (
-                        len(scheduled_loras) == self.lora_config.max_loras
-                        and request.lora_request.lora_int_id not in scheduled_loras
-                    )
-                ):
-                    # Scheduling would exceed max_loras, skip.
-                    self.waiting.pop_request()
-                    skipped_waiting_requests.prepend_request(request)
-                    continue
 
                 num_external_computed_tokens = 0
                 load_kv_async = False
@@ -595,9 +604,14 @@ class Scheduler(SchedulerInterface):
                         num_external_computed_tokens,
                     )
 
-                # Request was already popped from self.waiting
-                # unless it was re-added above due to new_blocks being None.
-                request = self.waiting.pop_request()
+                # Remove request from waiting queue
+                # For LPM policy, we already selected a specific request,
+                # so we need to remove it directly.
+                # For other policies, we pop from the front.
+                if self.policy == SchedulingPolicy.LPM:
+                    self.waiting.remove_request(request)
+                else:
+                    request = self.waiting.pop_request()
                 if load_kv_async:
                     # If loading async, allocate memory and put request
                     # into the WAITING_FOR_REMOTE_KV state.
@@ -745,6 +759,93 @@ class Scheduler(SchedulerInterface):
         with record_function_or_nullcontext("schedule: update_after_schedule"):
             self._update_after_schedule(scheduler_output)
         return scheduler_output
+
+    def _is_request_eligible_for_scheduling(
+        self,
+        request: Request,
+        scheduled_loras: set[int],
+    ) -> bool:
+        """Check if a request is eligible for scheduling.
+        
+        Returns False if the request should be skipped due to:
+        - Waiting for remote KVs
+        - Waiting for FSM compilation
+        - LoRA constraint violation
+        """
+        # KVTransfer: skip request if still waiting for remote kvs.
+        if request.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
+            is_ready = self._update_waiting_for_remote_kv(request)
+            if is_ready:
+                request.status = RequestStatus.WAITING
+            else:
+                return False
+
+        # Skip request if waiting for FSM compilation.
+        if request.status == RequestStatus.WAITING_FOR_FSM:
+            structured_output_req = request.structured_output_request
+            if structured_output_req and structured_output_req.grammar:
+                request.status = RequestStatus.WAITING
+            else:
+                return False
+
+        # Check LoRA constraint.
+        if (
+            self.lora_config
+            and request.lora_request
+            and (
+                len(scheduled_loras) == self.lora_config.max_loras
+                and request.lora_request.lora_int_id not in scheduled_loras
+            )
+        ):
+            return False
+
+        return True
+
+    def _select_best_waiting_request_lpm(
+        self,
+        scheduled_loras: set[int],
+    ) -> Request | None:
+        """Select the waiting request with the longest prefix cache hit.
+        
+        For LPM (Longest Prefix Match) scheduling policy, this method
+        iterates through all waiting requests, computes their prefix cache
+        hit length, and returns the request with the highest value.
+        
+        Args:
+            scheduled_loras: Set of LoRA IDs already scheduled in this step.
+            
+        Returns:
+            The request with the longest prefix cache hit, or None if no
+            eligible request is found.
+        """
+        best_request: Request | None = None
+        best_prefix_len = -1
+        best_arrival_time = float('inf')
+
+        for request in self.waiting:
+            # Skip ineligible requests
+            if not self._is_request_eligible_for_scheduling(
+                request, scheduled_loras
+            ):
+                continue
+
+            # Compute prefix cache hit length
+            if request.num_computed_tokens > 0:
+                # Request was preempted and already has computed tokens
+                prefix_len = request.num_computed_tokens
+            else:
+                # Compute prefix hit from KV cache manager
+                _, prefix_len = self.kv_cache_manager.get_computed_blocks(request)
+
+            # Select best request (highest prefix, earliest arrival for ties)
+            if (prefix_len > best_prefix_len or 
+                (prefix_len == best_prefix_len and 
+                 request.arrival_time < best_arrival_time)):
+                best_prefix_len = prefix_len
+                best_arrival_time = request.arrival_time
+                best_request = request
+
+        return best_request
 
     def _preempt_request(
         self,

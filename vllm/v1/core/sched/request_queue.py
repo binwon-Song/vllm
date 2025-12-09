@@ -15,6 +15,7 @@ class SchedulingPolicy(Enum):
 
     FCFS = "fcfs"
     PRIORITY = "priority"
+    LPM = "lpm"  # Longest Prefix Match
 
 
 class RequestQueue(ABC):
@@ -207,11 +208,98 @@ class PriorityRequestQueue(RequestQueue):
         return reversed(list(self))
 
 
+class LPMRequestQueue(RequestQueue):
+    """
+    A queue that prioritizes requests with the longest prefix cache hit.
+
+    Requests with higher num_cached_tokens are processed first.
+    If multiple requests have the same prefix length, the one with the earlier
+    arrival_time is processed first (to prevent starvation).
+    """
+
+    def __init__(self) -> None:
+        self._heap: list[tuple[int, float, str, Request]] = []
+
+    def _get_key(self, request: Request) -> tuple[int, float, str]:
+        """Get the sorting key for a request.
+        
+        Returns a tuple of (-prefix_len, arrival_time, request_id).
+        Negative prefix_len for max-heap behavior (higher prefix = smaller key).
+        """
+        # Use 0 as default when num_cached_tokens hasn't been set yet (-1)
+        prefix_len = max(request.num_cached_tokens, 0)
+        return (-prefix_len, request.arrival_time, request.request_id)
+
+    def add_request(self, request: Request) -> None:
+        """Add a request to the queue according to LPM policy."""
+        key = self._get_key(request)
+        heapq.heappush(self._heap, (*key, request))
+
+    def pop_request(self) -> Request:
+        """Pop a request from the queue according to LPM policy."""
+        if not self._heap:
+            raise IndexError("pop from empty heap")
+        return heapq.heappop(self._heap)[3]
+
+    def peek_request(self) -> Request:
+        """Peek at the next request in the queue without removing it."""
+        if not self._heap:
+            raise IndexError("peek from empty heap")
+        return self._heap[0][3]
+
+    def prepend_request(self, request: Request) -> None:
+        """Add a request to the queue according to LPM policy.
+
+        Note: In a LPM queue, there is no concept of prepending to the
+        front. Requests are ordered by (-prefix_len, arrival_time)."""
+        self.add_request(request)
+
+    def prepend_requests(self, requests: RequestQueue) -> None:
+        """Add all requests from another queue according to LPM policy.
+
+        Note: In a LPM queue, there is no concept of prepending to the
+        front. Requests are ordered by (-prefix_len, arrival_time)."""
+        for request in requests:
+            self.add_request(request)
+
+    def remove_request(self, request: Request) -> None:
+        """Remove a specific request from the queue."""
+        key = self._get_key(request)
+        self._heap.remove((*key, request))
+        heapq.heapify(self._heap)
+
+    def remove_requests(self, requests: Iterable[Request]) -> None:
+        """Remove multiple specific requests from the queue."""
+        requests_to_remove = requests if isinstance(requests, set) else set(requests)
+        self._heap = [item for item in self._heap if item[3] not in requests_to_remove]
+        heapq.heapify(self._heap)
+
+    def __bool__(self) -> bool:
+        """Check if queue has any requests."""
+        return bool(self._heap)
+
+    def __len__(self) -> int:
+        """Get number of requests in queue."""
+        return len(self._heap)
+
+    def __iter__(self) -> Iterator[Request]:
+        """Iterate over the queue according to LPM policy."""
+        heap_copy = self._heap[:]
+        while heap_copy:
+            yield heapq.heappop(heap_copy)[3]
+
+    def __reversed__(self) -> Iterator[Request]:
+        """Iterate over the queue in reverse LPM order."""
+        return reversed(list(self))
+
+
 def create_request_queue(policy: SchedulingPolicy) -> RequestQueue:
     """Create request queue based on scheduling policy."""
     if policy == SchedulingPolicy.PRIORITY:
         return PriorityRequestQueue()
     elif policy == SchedulingPolicy.FCFS:
         return FCFSRequestQueue()
+    elif policy == SchedulingPolicy.LPM:
+        return LPMRequestQueue()
     else:
         raise ValueError(f"Unknown scheduling policy: {policy}")
