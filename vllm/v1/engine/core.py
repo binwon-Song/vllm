@@ -1051,6 +1051,10 @@ class EngineCoreProc(EngineCore):
             for v, p in zip(args, arg_types)
         )
 
+    def get_insight_stats(self) -> dict[str, Any]:
+        """Expose scheduler insight stats to the client."""
+        return self.scheduler.get_insight_stats()
+
     def _send_engine_dead(self):
         """Send EngineDead status to the EngineCoreClient."""
 

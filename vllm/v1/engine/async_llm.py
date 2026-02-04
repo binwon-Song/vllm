@@ -871,3 +871,12 @@ class AsyncLLM(EngineClient):
     @property
     def dead_error(self) -> BaseException:
         return EngineDeadError()
+
+    async def get_insight_stats(self) -> dict[str, Any]:
+        """Get insight stats from the engine core."""
+        # Use getattr to avoid type checking issues if static analysis complains,
+        # but runtime it should be fine as it is AsyncMPClient.
+        # However, engine_core might be typed as EngineCoreClient (base).
+        # We can cast or just call it.
+        return await self.engine_core.call_utility_async("get_insight_stats")
+

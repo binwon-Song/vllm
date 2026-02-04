@@ -1885,3 +1885,67 @@ class Scheduler(SchedulerInterface):
         self.failed_recving_kv_req_ids |= async_failed_req_ids
         # Return sync affected IDs to skip in update_from_output
         return sync_failed_req_ids
+
+    def get_insight_stats(self) -> dict[str, Any]:
+        """Collects insight statistics for visualization.
+        
+        This method is designed to provide real-time visibility into the
+        internal state of the scheduler and block manager, exposing metrics
+        that are typically not available via standard logging.
+        """
+        
+        # 1. Memory Usage
+        total_blocks = self.kv_cache_manager.block_pool.num_gpu_blocks
+        free_blocks = self.kv_cache_manager.block_pool.free_block_queue.num_free_blocks
+        used_blocks = total_blocks - free_blocks
+        
+        # 2. Fragmentation & Sharing
+        shared_blocks = 0
+        block_grid = []
+        
+        # Safely iterate over blocks (accessing internal list)
+        for block in self.kv_cache_manager.block_pool.blocks:
+             block_info = {
+                 "id": block.block_id,
+                 "ref_count": block.ref_cnt,
+                 # "slot_filled": Unknown here without request mapping
+                 # "is_dirty": Unknown here
+             }
+             
+             if block.ref_cnt > 1:
+                 shared_blocks += 1
+             
+             block_grid.append(block_info)
+             
+        # 3. Queue Status
+        waiting_count = len(self.waiting)
+        running_count = len(self.running)
+        swapped_count = 0 
+        
+        # 4. Throughput 
+        # (Placeholder: actual throughput requires tracking over time)
+        
+        return {
+            "timestamp": time.time(),
+            "metrics": {
+                "gpu_usage": {
+                    "total_blocks": total_blocks,
+                    "free_blocks": free_blocks,
+                    "used_blocks": used_blocks
+                },
+                "queue_status": {
+                    "running": running_count,
+                    "waiting": waiting_count,
+                    "swapped": swapped_count
+                },
+                "throughput": { 
+                   "gen_tokens_per_sec": 0.0 
+                },
+                "stats": {
+                    "preemption_count": 0, 
+                    "prefix_cache_hit_rate": 0.0
+                }
+            },
+            "block_grid": block_grid
+        }
+

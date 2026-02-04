@@ -299,6 +299,20 @@ async def get_server_load_metrics(request: Request):
     return JSONResponse(content={"server_load": request.app.state.server_load_metrics})
 
 
+@router.get("/insight/stats")
+async def get_insight_stats(
+    engine_client: Annotated[EngineClient, Depends(engine_client)],
+):
+    if hasattr(engine_client, "get_insight_stats"):
+        stats = await engine_client.get_insight_stats()
+        return JSONResponse(content=stats)
+    else:
+        raise HTTPException(
+            status_code=501, detail="Insight stats not supported by this engine"
+        )
+
+
+
 @router.get("/v1/models")
 async def show_available_models(raw_request: Request):
     handler = models(raw_request)
