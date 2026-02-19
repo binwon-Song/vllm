@@ -881,6 +881,37 @@ def _log_non_streaming_response(response_body: list) -> None:
         logger.info("response_body={<binary_data>}")
 
 
+@router.get("/insight/sequence/{seq_id}")
+async def get_insight_sequence_info(
+    seq_id: str,
+    engine_client: Annotated[EngineClient, Depends(engine_client)],
+):
+    if hasattr(engine_client, "get_insight_request_info"):
+        info = await engine_client.get_insight_request_info(seq_id)
+        if info is None:
+             raise HTTPException(status_code=404, detail=f"Request {seq_id} not found")
+        return JSONResponse(content=info)
+    else:
+        raise HTTPException(
+            status_code=501, detail="Insight request info not supported by this engine"
+        )
+
+
+@router.get("/insight/requests")
+async def get_insight_all_requests(
+    engine_client: Annotated[EngineClient, Depends(engine_client)],
+):
+    """Get block mapping and memory stats for ALL active requests."""
+    if hasattr(engine_client, "get_insight_all_requests_stats"):
+        # This returns a list of request data
+        info_list = await engine_client.get_insight_all_requests_stats()
+        return JSONResponse(content={"requests": info_list})
+    else:
+        raise HTTPException(
+            status_code=501, detail="Insight all requests stats not supported by this engine"
+        )
+
+
 def build_app(args: Namespace) -> FastAPI:
     if args.disable_fastapi_docs:
         app = FastAPI(

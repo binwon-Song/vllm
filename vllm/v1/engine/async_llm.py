@@ -880,3 +880,10 @@ class AsyncLLM(EngineClient):
         # We can cast or just call it.
         return await self.engine_core.call_utility_async("get_insight_stats")
 
+    async def get_insight_request_info(self, request_id: str) -> dict[str, Any] | None:
+        return await self.engine_core.call_utility_async("get_insight_request_info", request_id)
+
+    async def get_insight_all_requests_stats(self) -> list[dict[str, Any]]:
+        return await self.engine_core.call_utility_async("get_insight_all_requests_stats")
+
+

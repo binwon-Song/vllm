@@ -1949,3 +1949,52 @@ class Scheduler(SchedulerInterface):
             "block_grid": block_grid
         }
 
+    def _generate_request_insight(self, request: Request) -> dict[str, Any]:
+        """Helper to generate insight data for a single request."""
+        request_id = request.request_id
+        
+        # Get blocks from all single type managers
+        blocks_map = {}
+        allocated_blocks_count = 0
+        for i, manager in enumerate(self.kv_cache_manager.coordinator.single_type_managers):
+            blocks = manager.req_to_blocks.get(request_id, [])
+            blocks_map[f"group_{i}"] = [b.block_id for b in blocks]
+            allocated_blocks_count += len(blocks)
+
+        # Spec-based fragmentation calculation
+        block_size = self.cache_config.block_size
+        total_slots = allocated_blocks_count * block_size
+        used_slots = request.num_computed_tokens
+        wasted_slots = total_slots - used_slots
+        fragmentation_ratio = wasted_slots / total_slots if total_slots > 0 else 0.0
+
+        return {
+            "request_id": request_id,
+            "status": str(request.status),
+            "arrival_time": request.arrival_time,
+            "num_computed_tokens": request.num_computed_tokens,
+            "block_table": blocks_map,
+            "memory_stats": {
+                "block_size": block_size,
+                "allocated_blocks": allocated_blocks_count,
+                "total_slots": total_slots,
+                "used_slots": used_slots,
+                "wasted_slots": wasted_slots,
+                "fragmentation_ratio": fragmentation_ratio
+            }
+        }
+
+    def get_insight_request_info(self, request_id: str) -> dict[str, Any] | None:
+        """Retrieve block mapping info for a specific request."""
+        if request_id not in self.requests:
+            return None
+        return self._generate_request_insight(self.requests[request_id])
+
+    def get_insight_all_requests_stats(self) -> list[dict[str, Any]]:
+        """Retrieve insight stats for all active requests."""
+        return [
+            self._generate_request_insight(req) 
+            for req in self.requests.values()
+        ]
+
+

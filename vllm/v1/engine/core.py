@@ -1055,6 +1055,14 @@ class EngineCoreProc(EngineCore):
         """Expose scheduler insight stats to the client."""
         return self.scheduler.get_insight_stats()
 
+    def get_insight_request_info(self, request_id: str) -> dict[str, Any] | None:
+        """Expose request block info."""
+        return self.scheduler.get_insight_request_info(request_id)
+
+    def get_insight_all_requests_stats(self) -> list[dict[str, Any]]:
+        """Expose stats for all requests."""
+        return self.scheduler.get_insight_all_requests_stats()
+
     def _send_engine_dead(self):
         """Send EngineDead status to the EngineCoreClient."""
 
