@@ -1968,11 +1968,19 @@ class Scheduler(SchedulerInterface):
         wasted_slots = total_slots - used_slots
         fragmentation_ratio = wasted_slots / total_slots if total_slots > 0 else 0.0
 
+        # Collect events including preemption
+        event_log = [
+            {"type": e.type.name, "timestamp": e.timestamp} 
+            for e in request.events
+        ]
+
         return {
             "request_id": request_id,
             "status": str(request.status),
             "arrival_time": request.arrival_time,
             "num_computed_tokens": request.num_computed_tokens,
+            "num_preemptions": request.num_preemptions,
+            "events": event_log,
             "block_table": blocks_map,
             "memory_stats": {
                 "block_size": block_size,
